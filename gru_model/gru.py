@@ -6,13 +6,20 @@ from torch.utils.data import Dataset, DataLoader, random_split
 import torch.nn.functional as F
 
 from torchtext.data import get_tokenizer
-from torchtext.vocab import GloVe
+from torchtext.vocab import GloVe, vocab
 
 import numpy as np
 import math
 
+import gensim.downloader as api
+
 
 glove = GloVe(name='840B', dim=300)
+
+def get_index(token):
+    model = api.load("glove-wiki-gigaword-300") 
+    print(model)
+    print(glove.stoi[token])
 
 #RNN from Lab 5, changes made to the function for project purposes
 class RNN(model.Model):
@@ -143,7 +150,7 @@ class packageDataset(Dataset):
         # the maximum length can be explored in the future, but we want to standardize the
         # such that we can train in batches.
         max_len = 10000 
-        tokenizer = get_tokenizer("basic_english")
+        tokenizer = get_tokenizer("subword")
         print(df)
         for input in df['inputs']:
             syn_len = len(tokenizer(input))
@@ -156,19 +163,30 @@ class packageDataset(Dataset):
                 max_len = syn_len
 
         # for i in range(len(df['synopsis'])):
-        def process_example(ex):
+        def process_input(ex):
             ex = tokenizer(ex)
             ex += ['<pad>'] * (max_len - len(ex))
             ex = glove.get_vecs_by_tokens(ex)
             # ex = torch.transpose(ex, 0, 1)
             return torch.tensor(ex)
         
+        def process_output(ex):
+            ex = tokenizer(ex)
+            ex += ['<pad>'] * (max_len - len(ex))
+            for word in ex:
+                one_hot = torch.nn.functional.one_hot(get_index(word), glove.dim(0))
+            
+            print(one_hot)
+            # ex = glove.get_vecs_by_tokens(ex)
+            # ex = torch.transpose(ex, 0, 1)
+            return one_hot
+        
         for i in range(len(df['inputs'])):
             new_df = {}
             new_df['inputs'] = torch.empty((len(df['inputs']), max_len, 300))
             new_df['outputs'] = torch.empty((len(df['outputs']), max_len, 300))
-            new_df['inputs'][i,:,:] = process_example(df['inputs'][i])
-            new_df['outputs'][i,:,:] = process_example(df['outputs'][i])
+            new_df['inputs'][i,:,:] = process_input(df['inputs'][i])
+            new_df['outputs'][i,:,:] = process_output(df['outputs'][i])
             print(new_df['inputs'].size())
             new_df['inputs'] = new_df['inputs'].squeeze(0).squeeze(0)
             new_df['outputs'] = new_df['outputs'].squeeze(0).squeeze(0)
