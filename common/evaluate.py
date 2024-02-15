@@ -25,7 +25,8 @@ def calc_loss_per_batch(data, net, criterion, total_loss, total_epoch):
     if torch.cuda.is_available():
         inputs = inputs.cuda()
         labels = labels.cuda()
-        
+    
+    print(inputs.size())
     outputs = net(inputs)
     loss = torch.sqrt(criterion(outputs, labels.float()))
     # print(loss)

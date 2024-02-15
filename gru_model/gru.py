@@ -55,11 +55,71 @@ class RNN(model.Model):
             output = torch.cat([torch.max(output, dim=1)[0],
                                 torch.mean(output, dim=1)], dim=0)
         # output = self.classifier(output)
+        print(output)
         return output
 
+class Attention(nn.Module):
+    def __init__(self, hidden_size):
+        super(Attention, self).__init__()
+        self.hidden_size = hidden_size
+        
+    def dot_score(self, hidden_state, encoder_states):
+        return torch.sum(hidden_state * encoder_states, dim=2)
+      
+    def forward(self, hidden, encoder_outputs, mask):
+        attn_scores = self.dot_score(hidden, encoder_outputs)# Transpose max_length and batch_size dimensions
+        attn_scores = attn_scores.t()# Apply mask so network does not attend <pad> tokens        
+        attn_scores = attn_scores.masked_fill(mask == 0, -1e10)
+        # Return softmax over attention scores      
+        return F.softmax(attn_scores, dim=1).unsqueeze(1)
+
+
+class Decoder(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size, n_layers=1, dropout=0.1):
+        
+        super(Decoder, self).__init__()
+        
+        # Basic network params
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        self.n_layers = n_layers
+        self.dropout = dropout
+                
+        self.gru = nn.GRU(input_size,
+                          hidden_size,
+                          num_layers=n_layers,
+                          batch_first=True,
+                          dropout=dropout)
+        
+        self.concat = nn.Linear(hidden_size * 2, hidden_size)
+        self.out = nn.Linear(hidden_size, output_size)
+        self.attn = Attention(hidden_size)
+        
+    def forward(self, current_token, hidden_state, encoder_outputs, mask):        
+        # Pass through GRU
+        rnn_output, hidden_state = self.gru(current_token, hidden_state)
+        
+        # Calculate attention weights
+        attention_weights = self.attn(rnn_output, encoder_outputs, mask)
+        
+        # Calculate context vector
+        context = attention_weights.bmm(encoder_outputs.transpose(0, 1))
+        
+        # Concatenate  context vector and GRU output
+        rnn_output = rnn_output.squeeze(0)
+        context = context.squeeze(1)
+        concat_input = torch.cat((rnn_output, context), 1)
+        concat_output = torch.tanh(self.concat(concat_input))
+        
+        # Pass concat_output to final output layer
+        output = self.out(concat_output)
+        
+        # Return output and final hidden state
+        return output, hidden_state
 
 #Anime dataset class
-class animeDataset(Dataset):
+class packageDataset(Dataset):
     def __init__(self, df):
         self.df, self.max_len = self.tokenize(df)
 
@@ -84,6 +144,7 @@ class animeDataset(Dataset):
         # such that we can train in batches.
         max_len = 10000 
         tokenizer = get_tokenizer("basic_english")
+        print(df)
         for input in df['inputs']:
             syn_len = len(tokenizer(input))
             if syn_len > max_len:
@@ -100,14 +161,23 @@ class animeDataset(Dataset):
             ex += ['<pad>'] * (max_len - len(ex))
             ex = glove.get_vecs_by_tokens(ex)
             # ex = torch.transpose(ex, 0, 1)
-            return ex
+            return torch.tensor(ex)
+        
+        for i in range(len(df['inputs'])):
+            new_df = {}
+            new_df['inputs'] = torch.empty((len(df['inputs']), max_len, 300))
+            new_df['outputs'] = torch.empty((len(df['outputs']), max_len, 300))
+            new_df['inputs'][i,:,:] = process_example(df['inputs'][i])
+            new_df['outputs'][i,:,:] = process_example(df['outputs'][i])
+            print(new_df['inputs'].size())
+            new_df['inputs'] = new_df['inputs'].squeeze(0).squeeze(0)
+            new_df['outputs'] = new_df['outputs'].squeeze(0).squeeze(0)
 
-        df['inputs'] = df['inputs'].map(process_example)
-        return df, max_len
+        return new_df, max_len
 
 #Data loader function
 def get_data_loaders(path_to_input, path_to_output, batch_size=32):
-    df = {'inputs': torch.tensor([]), 'outputs': torch.tensor([])}
+    df = {'inputs': [], 'outputs': []}
 
     with open(path_to_input, 'r') as file:
         input = file.read()
@@ -117,10 +187,8 @@ def get_data_loaders(path_to_input, path_to_output, batch_size=32):
 
     df['inputs'].append(input)
     df['outputs'].append(output)
-    print(df['inputs'])
-    print(df['outputs'])
 
-    ds = animeDataset(df)
+    ds = packageDataset(df)
     max_len = ds.max_len
 
     train_size = int(0.8*len(ds))
