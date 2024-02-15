@@ -39,7 +39,8 @@ class RNN(model.Model):
                           bidirectional=bidir)
         if bidir: x = 2
         else: x = 1
-        self.classifier = nn.Linear(x*hidden_size, 1)
+        # self.classifier = nn.Linear(x*hidden_size, 1) 
+        # we don't need a classifier at this stage
 
     def forward(self, inp, hidden=None):
         output, hidden = self.rnn(inp)
@@ -53,33 +54,43 @@ class RNN(model.Model):
         elif self.pool == 'cat':
             output = torch.cat([torch.max(output, dim=1)[0],
                                 torch.mean(output, dim=1)], dim=0)
-        output = self.classifier(output)
+        # output = self.classifier(output)
         return output
 
 
 #Anime dataset class
 class animeDataset(Dataset):
     def __init__(self, df):
-        self.df, self.max_len = self.normalize_cols(df)
+        self.df, self.max_len = self.tokenize(df)
 
     def __len__(self):
         return len(self.df)
 
     def __getitem__(self, id):
-        row = self.df.iloc[id]
-        label = torch.tensor(row['popularity']).float()
-        data = row['synopsis']
-        return data, label
+        input_data = self.df['inputs']
+        output_data = self.df['outputs']
+        return input_data, output_data
+        # label = torch.tensor(row['popularity']).float()
+        # data = row['synopsis']
+        # return data, label
 
-    def normalize_cols(self, df):
-        cols = ['popularity', 'synopsis']
-        df = df[cols]
-        df['popularity'] = (df['popularity'] - df['popularity'].min()) / (df['popularity'].max() - df['popularity'].min())
+    def tokenize(self, df):
+        # cols = ['popularity', 'synopsis']
+        # df = df[cols]
+        # df['popularity'] = (df['popularity'] - df['popularity'].min()) / (df['popularity'].max() - df['popularity'].min())
 
-        max_len = -1
+        # assume a maximum file length of 10000 for simplicity sake for now.
+        # the maximum length can be explored in the future, but we want to standardize the
+        # such that we can train in batches.
+        max_len = 10000 
         tokenizer = get_tokenizer("basic_english")
-        for synopsis in df['synopsis']:
-            syn_len = len(tokenizer(synopsis))
+        for input in df['inputs']:
+            syn_len = len(tokenizer(input))
+            if syn_len > max_len:
+                max_len = syn_len
+
+        for output in df['outputs']:
+            syn_len = len(tokenizer(output))
             if syn_len > max_len:
                 max_len = syn_len
 
@@ -91,14 +102,27 @@ class animeDataset(Dataset):
             # ex = torch.transpose(ex, 0, 1)
             return ex
 
-        df['synopsis'] = df['synopsis'].map(process_example)
+        df['inputs'] = df['inputs'].map(process_example)
         return df, max_len
 
 #Data loader function
-def get_data_loaders(path_to_csv, batch_size=32):
-    df = pd.read_csv(path_to_csv)
+def get_data_loaders(path_to_input, path_to_output, batch_size=32):
+    df = {'inputs': torch.tensor([]), 'outputs': torch.tensor([])}
+
+    with open(path_to_input, 'r') as file:
+        input = file.read()
+    
+    with open(path_to_output, 'r') as file:
+        output = file.read()
+
+    df['inputs'].append(input)
+    df['outputs'].append(output)
+    print(df['inputs'])
+    print(df['outputs'])
+
     ds = animeDataset(df)
     max_len = ds.max_len
+
     train_size = int(0.8*len(ds))
     val_size = len(ds) - train_size
     train, val = random_split(ds, [train_size, val_size])
