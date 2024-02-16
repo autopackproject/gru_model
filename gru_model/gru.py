@@ -18,7 +18,7 @@ glove = GloVe(name='840B', dim=300)
 
 def get_index(token):
     model = api.load("glove-wiki-gigaword-300") 
-    print(model)
+    print(model[token])
     print(glove.stoi[token])
 
 #RNN from Lab 5, changes made to the function for project purposes
@@ -65,7 +65,8 @@ class RNN(model.Model):
         print(output)
         return output
 
-class Attention(nn.Module):
+
+class Attention(model.Model):
     def __init__(self, hidden_size):
         super(Attention, self).__init__()
         self.hidden_size = hidden_size
@@ -81,7 +82,7 @@ class Attention(nn.Module):
         return F.softmax(attn_scores, dim=1).unsqueeze(1)
 
 
-class Decoder(nn.Module):
+class Decoder(model.Model):
     def __init__(self, input_size, hidden_size, output_size, n_layers=1, dropout=0.1):
         
         super(Decoder, self).__init__()
@@ -124,6 +125,89 @@ class Decoder(nn.Module):
         
         # Return output and final hidden state
         return output, hidden_state
+
+
+class seq2seq(nn.Module):
+    def __init__(self, embedding_size, hidden_size, vocab_size, 
+                 device, pad_idx, eos_idx, sos_idx, teacher_forcing_ratio=0.5):
+        super(seq2seq, self).__init__()
+        
+        # Embedding layer shared by encoder and decoder
+        self.embedding = nn.Embedding(vocab_size, embedding_size)
+        
+        # Encoder network
+        self.encoder = RNN(hidden_size, 
+                            embedding_size, 
+                            self.embedding,
+                            num_layers=2,
+                            dropout=0.5)
+        
+        # Decoder network        
+        self.decoder = Decoder(self.embedding,
+                            embedding_size,
+                            hidden_size,
+                            vocab_size,
+                            n_layers=2,
+                            dropout=0.5)
+        
+        
+        # Indices of special tokens and hardware device 
+        self.pad_idx = pad_idx
+        self.eos_idx = eos_idx
+        self.sos_idx = sos_idx
+        self.device = device
+        
+    def create_mask(self, input_sequence):
+        return (input_sequence != self.pad_idx).permute(1, 0)
+        
+    def forward(self, input_sequence, output_sequence, teacher_forcing_ratio=0.5):
+      
+        # Unpack input_sequence tuple
+        input_tokens = input_sequence[0]
+        input_lengths = input_sequence[1]
+      
+        # Unpack output_tokens, or create an empty tensor for text generation
+        if output_sequence is None:
+            inference = True
+            output_tokens = torch.zeros((100, input_tokens.shape[1])).long().fill_(self.sos_idx).to(self.device)
+        else:
+            inference = False
+            output_tokens = output_sequence[0]
+            vocab_size = self.decoder.output_size
+        
+        batch_size = len(input_lengths)
+        max_seq_len = len(output_tokens)
+        
+        #tensor to store decoder outputs
+        outputs = torch.zeros(max_seq_len, batch_size, vocab_size).to(self.device)
+
+        # Pass through the first half of the network
+        encoder_outputs, hidden = self.encoder(input_tokens, input_lengths)
+        
+        # Ensure dim of hidden_state can be fed into Decoder
+        hidden =  hidden[:self.decoder.n_layers]
+        
+        #first input to the decoder is the <sos> tokens
+        output = output_tokens[0,:]
+        
+        # Create mask
+        mask = self.create_mask(input_tokens)
+        
+        # Step through the length of the output sequence one token at a time
+        # Teacher forcing is used to assist training
+        for t in range(1, max_seq_len):
+            output = output.unsqueeze(0)
+            
+            output, hidden = self.decoder(output, hidden, encoder_outputs, mask)
+            outputs[t] = output
+            teacher_force = random.random() < teacher_forcing_ratio
+            top1 = output.max(1)[1]
+            output = (output_tokens[t] if teacher_force else top1)
+            
+            # If we're in inference mode, keep generating until we produce an
+            # <eos> token
+            if inference and output.item() == self.eos_idx:
+                return outputs[:t]return outputs
 
 #Anime dataset class
 class packageDataset(Dataset):
